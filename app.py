@@ -15,7 +15,8 @@ import streamlit as st
 # nếu có ANTHROPIC_API_KEY thì dùng Claude (trả phí, chất lượng cao hơn).
 NHA_CUNG_CAP = "gemini" if "GEMINI_API_KEY" in st.secrets else "claude"
 MODEL_CLAUDE = "claude-haiku-5-5"
-MODEL_GEMINI = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL_GEMINI = st.secrets.get("GEMINI_MODEL", "gemini-4-hydrogen")
+MODEL_GEMINI_DU_PHONG = ["gemini-4-hydrogen", "gemini-3-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
 MAX_TOKENS = 700                     # độ dài tối đa mỗi câu trả lời
 SO_LUOT_NHO = 6                      # số lượt hội thoại gần nhất gửi kèm
 HOTLINE = st.secrets.get("HOTLINE", "[số điện thoại UBND xã]")
@@ -77,13 +78,25 @@ def hoi_ai(tin_nhan):
         client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
         noi_dung = [{"role": "user" if t["role"] == "user" else "model",
                      "parts": [{"text": t["content"]}]} for t in tin_nhan]
-        kq = client.models.generate_content(
-            model=MODEL_GEMINI,
-            contents=noi_dung,
-            config=types.GenerateContentConfig(system_instruction=CHI_DAN,
-                                               max_output_tokens=MAX_TOKENS),
-        )
-        return kq.text
+        # Thử lần lượt các mô hình: mô hình khai báo trong Secrets trước, rồi các mô hình dự phòng
+        loi_cuoi = None
+        for model in dict.fromkeys([MODEL_GEMINI] + MODEL_GEMINI_DU_PHONG):
+            try:
+                kq = client.models.generate_content(
+                    model=model,
+                    contents=noi_dung,
+                    config=types.GenerateContentConfig(system_instruction=CHI_DAN,
+                                                       max_output_tokens=MAX_TOKENS),
+                )
+                if kq.text:
+                    return kq.text
+            except Exception as loi:
+                loi_cuoi = loi
+                print(f"LỖI mô hình {model}:", repr(loi), flush=True)
+                # Lỗi khóa API hoặc hết hạn mức thì không cần thử mô hình khác
+                if any(x in str(loi) for x in ("API key", "API_KEY", "PERMISSION_DENIED", "429", "RESOURCE_EXHAUSTED")):
+                    break
+        raise loi_cuoi or RuntimeError("Không nhận được câu trả lời từ Gemini")
     import anthropic
     client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
     kq = client.messages.create(model=MODEL_CLAUDE, max_tokens=MAX_TOKENS,
@@ -119,7 +132,14 @@ if cau_hoi:
         except Exception as loi:
             tra_loi = ("Xin lỗi, hệ thống đang bận. Vui lòng thử lại sau hoặc liên hệ " + HOTLINE)
             ghi_nhat_ky(cau_hoi, False)
-            print("LỖI:", loi)
+            print("LỖI:", repr(loi), flush=True)
+            if str(st.secrets.get("SHOW_ERRORS", "0")) == "1":
+                # Chỉ hiện khi quản trị bật SHOW_ERRORS = "1" trong Secrets; che khóa API nếu có
+                chi_tiet = str(loi)
+                for k in ("GEMINI_API_KEY", "ANTHROPIC_API_KEY"):
+                    if k in st.secrets:
+                        chi_tiet = chi_tiet.replace(str(st.secrets[k]), "***")
+                st.error(f"[Chi tiết lỗi cho quản trị] {type(loi).__name__}: {chi_tiet[:600]}")
         st.markdown(tra_loi)
 
     st.session_state.lich_su.append({"role": "assistant", "content": tra_loi})
