@@ -16,7 +16,8 @@ import streamlit as st
 NHA_CUNG_CAP = "gemini" if "GEMINI_API_KEY" in st.secrets else "claude"
 MODEL_CLAUDE = "claude-haiku-5-5"
 MODEL_GEMINI = st.secrets.get("GEMINI_MODEL", "gemini-4-hydrogen")
-MODEL_GEMINI_DU_PHONG = ["gemini-4-hydrogen", "gemini-3-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+MODEL_GEMINI_DU_PHONG = ["gemini-3.8-flash", "gemini-4-hydrogen", "gemini-3.5-flash-lite"]
+MAX_TOKENS_GEMINI = 4096   # mô hình Gemini mới có bước "suy nghĩ" nên cần hạn mức lớn hơn
 MAX_TOKENS = 700                     # độ dài tối đa mỗi câu trả lời
 SO_LUOT_NHO = 6                      # số lượt hội thoại gần nhất gửi kèm
 HOTLINE = st.secrets.get("HOTLINE", "[số điện thoại UBND xã]")
@@ -86,10 +87,13 @@ def hoi_ai(tin_nhan):
                     model=model,
                     contents=noi_dung,
                     config=types.GenerateContentConfig(system_instruction=CHI_DAN,
-                                                       max_output_tokens=MAX_TOKENS),
+                                                       max_output_tokens=MAX_TOKENS_GEMINI),
                 )
                 if kq.text:
                     return kq.text
+                ly_do = kq.candidates[0].finish_reason if kq.candidates else "không có kết quả"
+                loi_cuoi = RuntimeError(f"Mô hình {model} trả lời rỗng (lý do: {ly_do})")
+                print("LỖI:", loi_cuoi, flush=True)
             except Exception as loi:
                 loi_cuoi = loi
                 print(f"LỖI mô hình {model}:", repr(loi), flush=True)
