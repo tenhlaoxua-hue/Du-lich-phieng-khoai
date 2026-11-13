@@ -8,11 +8,14 @@ import glob
 import os
 from datetime import datetime
 
-import anthropic
 import streamlit as st
 
 # ---------- 1. CẤU HÌNH ----------
-MODEL = "claude-haiku-5-5"          # mô hình nhanh, chi phí thấp
+# Bộ não AI: nếu có GEMINI_API_KEY thì dùng Google Gemini (gói miễn phí),
+# nếu có ANTHROPIC_API_KEY thì dùng Claude (trả phí, chất lượng cao hơn).
+NHA_CUNG_CAP = "gemini" if "GEMINI_API_KEY" in st.secrets else "claude"
+MODEL_CLAUDE = "claude-haiku-5-5"
+MODEL_GEMINI = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
 MAX_TOKENS = 700                     # độ dài tối đa mỗi câu trả lời
 SO_LUOT_NHO = 6                      # số lượt hội thoại gần nhất gửi kèm
 HOTLINE = st.secrets.get("HOTLINE", "[số điện thoại UBND xã]")
@@ -25,7 +28,12 @@ st.set_page_config(page_title="Trợ lý du lịch Phiêng Khoài", page_icon="�
 @st.cache_data
 def nap_du_lieu():
     phan = []
-    for duong_dan in sorted(glob.glob("du_lieu/*.md")):
+    # Đọc dữ liệu trong thư mục du_lieu/ và cả các file .md đặt ngay ở thư mục gốc
+    ds = glob.glob("du_lieu/*.md") + [
+        f for f in glob.glob("*.md")
+        if not f.lower().startswith(("readme", "huong_dan"))
+    ]
+    for duong_dan in sorted(set(ds), key=os.path.basename):
         with open(duong_dan, encoding="utf-8") as f:
             ten = os.path.basename(duong_dan)
             phan.append(f'<tai_lieu ten="{ten}">\n{f.read()}\n</tai_lieu>')
@@ -61,8 +69,31 @@ def ghi_nhat_ky(cau_hoi, thanh_cong):
         w.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), len(cau_hoi), thanh_cong])
 
 
-# ---------- 5. GIAO DIỆN ----------
+# ---------- 5. GỌI BỘ NÃO AI ----------
+def hoi_ai(tin_nhan):
+    if NHA_CUNG_CAP == "gemini":
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+        noi_dung = [{"role": "user" if t["role"] == "user" else "model",
+                     "parts": [{"text": t["content"]}]} for t in tin_nhan]
+        kq = client.models.generate_content(
+            model=MODEL_GEMINI,
+            contents=noi_dung,
+            config=types.GenerateContentConfig(system_instruction=CHI_DAN,
+                                               max_output_tokens=MAX_TOKENS),
+        )
+        return kq.text
+    import anthropic
+    client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+    kq = client.messages.create(model=MODEL_CLAUDE, max_tokens=MAX_TOKENS,
+                                system=CHI_DAN, messages=tin_nhan)
+    return kq.content[0].text
+
+
+# ---------- 6. GIAO DIỆN ----------
 st.title("🌸 Trợ lý du lịch Phiêng Khoài")
+st.caption("Phiên bản áp dụng thử · Mô hình “Du lịch số Phiêng Khoài” · UBND xã Phiêng Khoài, tỉnh Sơn La")
 st.caption("Xin chào · ສະບາຍດີ · Hello — Hỏi bằng tiếng Việt, tiếng Lào hoặc tiếng Anh.")
 st.info("Bạn đang trò chuyện với trợ lý ảo sử dụng trí tuệ nhân tạo (AI) do UBND xã Phiêng Khoài vận hành. "
         "Vui lòng không nhập thông tin cá nhân. Thông tin quan trọng xin liên hệ: " + HOTLINE)
@@ -83,14 +114,7 @@ if cau_hoi:
 
     with st.chat_message("assistant"):
         try:
-            client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
-            phan_hoi = client.messages.create(
-                model=MODEL,
-                max_tokens=MAX_TOKENS,
-                system=CHI_DAN,
-                messages=st.session_state.lich_su[-SO_LUOT_NHO:],
-            )
-            tra_loi = phan_hoi.content[0].text
+            tra_loi = hoi_ai(st.session_state.lich_su[-SO_LUOT_NHO:])
             ghi_nhat_ky(cau_hoi, True)
         except Exception as loi:
             tra_loi = ("Xin lỗi, hệ thống đang bận. Vui lòng thử lại sau hoặc liên hệ " + HOTLINE)
