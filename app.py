@@ -1,0 +1,101 @@
+# -*- coding: utf-8 -*-
+"""
+TRỢ LÝ ẢO DU LỊCH PHIÊNG KHOÀI – Hợp phần 4, mô hình "Du lịch số Phiêng Khoài"
+Chủ quản: UBND xã Phiêng Khoài. Chỉ trả lời dựa trên tài liệu đã kiểm duyệt trong thư mục du_lieu/.
+"""
+import csv
+import glob
+import os
+from datetime import datetime
+
+import anthropic
+import streamlit as st
+
+# ---------- 1. CẤU HÌNH ----------
+MODEL = "claude-haiku-5-5"          # mô hình nhanh, chi phí thấp
+MAX_TOKENS = 700                     # độ dài tối đa mỗi câu trả lời
+SO_LUOT_NHO = 6                      # số lượt hội thoại gần nhất gửi kèm
+HOTLINE = st.secrets.get("HOTLINE", "[số điện thoại UBND xã]")
+NHAT_KY = "nhat_ky_cau_hoi.csv"      # minh chứng: số câu hỏi đã trả lời
+
+st.set_page_config(page_title="Trợ lý du lịch Phiêng Khoài", page_icon="🌸")
+
+
+# ---------- 2. NẠP TÀI LIỆU ĐÃ KIỂM DUYỆT ----------
+@st.cache_data
+def nap_du_lieu():
+    phan = []
+    for duong_dan in sorted(glob.glob("du_lieu/*.md")):
+        with open(duong_dan, encoding="utf-8") as f:
+            ten = os.path.basename(duong_dan)
+            phan.append(f'<tai_lieu ten="{ten}">\n{f.read()}\n</tai_lieu>')
+    return "\n\n".join(phan)
+
+
+# ---------- 3. CHỈ DẪN HỆ THỐNG (quy tắc trả lời) ----------
+CHI_DAN = f"""Bạn là Trợ lý ảo du lịch của Ủy ban nhân dân xã Phiêng Khoài, tỉnh Sơn La.
+
+QUY TẮC BẮT BUỘC:
+1. Chỉ trả lời dựa trên nội dung trong các thẻ <tai_lieu> bên dưới. Không dùng hiểu biết bên ngoài để nêu số liệu, giá, giờ mở cửa, ngày lễ hội, tên người.
+2. Nội dung ghi "[cần bổ sung]", "[cần xác minh]" hoặc nằm trong ngoặc vuông là CHƯA CÓ thông tin chính thức: không được nêu ra như sự thật. Nếu tài liệu không có thông tin, nói rõ là chưa có thông tin chính thức và đề nghị du khách liên hệ UBND xã Phiêng Khoài theo số {HOTLINE}. Không đoán.
+3. Trả lời bằng đúng ngôn ngữ của câu hỏi: tiếng Việt, tiếng Lào (ພາສາລາວ) hoặc tiếng Anh.
+4. Ngắn gọn, lịch sự, thân thiện; tối đa khoảng 150 từ; dùng gạch đầu dòng khi liệt kê.
+5. Không hỏi, không ghi nhận thông tin cá nhân của du khách (số định danh, địa chỉ, số tài khoản…).
+6. Tôn trọng văn hóa các dân tộc; khi nói về Di tích Lao Khô, trình bày đúng nội dung tài liệu, trang trọng.
+7. Về hang Tà Ẻn: luôn nhắc du khách không tự ý vào hang, phải đi cùng người dẫn đường địa phương.
+8. Không trả lời nội dung ngoài phạm vi du lịch, văn hóa, dịch vụ tại xã; lịch sự từ chối và gợi ý câu hỏi phù hợp.
+
+TÀI LIỆU:
+{nap_du_lieu()}
+"""
+
+
+# ---------- 4. GHI NHẬT KÝ (phục vụ minh chứng sáng kiến) ----------
+def ghi_nhat_ky(cau_hoi, thanh_cong):
+    moi = not os.path.exists(NHAT_KY)
+    with open(NHAT_KY, "a", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        if moi:
+            w.writerow(["thoi_gian", "do_dai_cau_hoi", "thanh_cong"])
+        # chỉ lưu thời gian và độ dài, KHÔNG lưu nội dung để bảo vệ dữ liệu cá nhân
+        w.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), len(cau_hoi), thanh_cong])
+
+
+# ---------- 5. GIAO DIỆN ----------
+st.title("🌸 Trợ lý du lịch Phiêng Khoài")
+st.caption("Xin chào · ສະບາຍດີ · Hello — Hỏi bằng tiếng Việt, tiếng Lào hoặc tiếng Anh.")
+st.info("Bạn đang trò chuyện với trợ lý ảo sử dụng trí tuệ nhân tạo (AI) do UBND xã Phiêng Khoài vận hành. "
+        "Vui lòng không nhập thông tin cá nhân. Thông tin quan trọng xin liên hệ: " + HOTLINE)
+
+if "lich_su" not in st.session_state:
+    st.session_state.lich_su = []
+
+for tin in st.session_state.lich_su:
+    with st.chat_message(tin["role"]):
+        st.markdown(tin["content"])
+
+cau_hoi = st.chat_input("Nhập câu hỏi… / ພິມຄຳຖາມ… / Ask a question…")
+
+if cau_hoi:
+    st.session_state.lich_su.append({"role": "user", "content": cau_hoi})
+    with st.chat_message("user"):
+        st.markdown(cau_hoi)
+
+    with st.chat_message("assistant"):
+        try:
+            client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
+            phan_hoi = client.messages.create(
+                model=MODEL,
+                max_tokens=MAX_TOKENS,
+                system=CHI_DAN,
+                messages=st.session_state.lich_su[-SO_LUOT_NHO:],
+            )
+            tra_loi = phan_hoi.content[0].text
+            ghi_nhat_ky(cau_hoi, True)
+        except Exception as loi:
+            tra_loi = ("Xin lỗi, hệ thống đang bận. Vui lòng thử lại sau hoặc liên hệ " + HOTLINE)
+            ghi_nhat_ky(cau_hoi, False)
+            print("LỖI:", loi)
+        st.markdown(tra_loi)
+
+    st.session_state.lich_su.append({"role": "assistant", "content": tra_loi})
